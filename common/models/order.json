@@ -1,0 +1,71 @@
+{
+  "name": "orders",
+  "base": "PersistedModel",
+  "idInjection": true,
+  "options": {
+    "validateUpsert": true
+  },
+  "properties": {
+    "id": {
+      "type": "number"
+    },
+    "ordertag": {
+      "type": "string"
+    },
+    "uid": {
+      "type": "number"
+    },
+    "devicetype": {
+      "type": "number"
+    },
+    "zipurl": {
+      "type": "string"
+    },
+    "weight": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "filecount": {
+      "type": "number"
+    },
+    "dvdcount": {
+      "type": "number"
+    },
+    "dvdtitle": {
+      "type": "string"
+    },
+    "dvdcaption": {
+      "type": "string"
+    },
+    "inserttime": {
+      "type": "number"
+    },
+    "updatetime": {
+      "type": "number"
+    },
+    "created_at": {
+      "type": "date"
+    },
+    "updated_at": {
+      "type": "date"
+    },
+    "burn_lock": {
+      "type": "number",
+      "default": 0
+    },
+    "burn_app": {
+      "type": "number",
+      "default": 0
+    },
+    "burn_app_num": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "validations": [],
+  "relations": {},
+  "acls": [],
+  "methods": {}
+}

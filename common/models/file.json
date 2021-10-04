@@ -1,0 +1,55 @@
+{
+  "name": "file",
+  "base": "PersistedModel",
+  "idInjection": true,
+  "options": {
+    "validateUpsert": true
+  },
+  "properties": {
+    "id": {
+      "type": "number",
+      "required": true
+    },
+    "uid": {
+      "type": "number",
+      "required": true
+    },
+    "ftype": {
+      "type": "string"
+    },
+    "furl": {
+      "type": "string"
+    },
+    "ftsurl": {
+      "type": "string"
+    },
+    "fzipurl": {
+      "type": "string"
+    },
+    "fplaytime": {
+      "type": "number"
+    },
+    "fweight": {
+      "type": "number"
+    },
+    "fstatus": {
+      "type": "number"
+    },
+    "finserttime": {
+      "type": "number"
+    },
+    "created_at": {
+      "type": "date"
+    },
+    "updated_at": {
+      "type": "date"
+    },
+    "ct_caption": {
+      "type": "string"
+    }
+  },
+  "validations": [],
+  "relations": {},
+  "acls": [],
+  "methods": {}
+}

@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "sources": [
+      "loopback/common/models",
+      "loopback/server/models",
+      "../common/models",
+      "./models"
+    ],
+    "mixins": [
+      "loopback/common/mixins",
+      "loopback/server/mixins",
+      "../common/mixins",
+      "./mixins"
+    ]
+  },
+  "User": {
+    "dataSource": "db"
+  },
+  "AccessToken": {
+    "dataSource": "db",
+    "public": false
+  },
+  "ACL": {
+    "dataSource": "db",
+    "public": false
+  },
+  "RoleMapping": {
+    "dataSource": "db",
+    "public": false,
+    "options": {
+      "strictObjectIDCoercion": true
+    }
+  },
+  "Role": {
+    "dataSource": "db",
+    "public": false
+  },
+  "Message": {
+    "dataSource": null
+  },
+  "file": {
+    "dataSource": "mySqldvdburner",
+    "public": false
+  },
+  "order_file": {
+    "dataSource": "mySqldvdburner",
+    "public": false
+  },
+  "orders": {
+    "dataSource": "mySqldvdburner",
+    "public": false
+  },
+  "order_shipping": {
+    "dataSource": "mySqldvdburner",
+    "public": false
+  },
+  "Container": {
+    "dataSource": "awsStorage",
+    "public": true
+  },
+  "Social": {
+    "dataSource": "mySqldvdburner",
+    "public": true
+  }
+}

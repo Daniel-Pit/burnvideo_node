@@ -1,0 +1,67 @@
+#!/bin/bash -e
+
+URI=$1
+OUTPUT_PATH=$2
+BASENAME=`basename "${URI#https://}"`
+MOVIE_PATH="/tmp/$BASENAME"
+TMP_PATH="/tmp/tmp_$OUTPUT_PATH"
+TMP_IMAGEPATH="/tmp/tmpimage_$BASENAME"
+TMP_BACKIMAGEPATH="/tmp/backtmpimage_$BASENAME"
+
+echo "URI:           $URI"
+echo "MOVIE_PATH:    $MOVIE_PATH"
+echo "BASENAME:      $BASENAME"
+echo "TMP IMAGE PATH: $TMP_IMAGEPATH"
+echo "TMP VIDEO PATH: $TMP_PATH"
+
+if [[ $URI == https://* ]]; then
+  function finish() {
+    rm -f $MOVIE_PATH
+  }
+
+  trap finish EXIT
+
+  s3cmd get s3://burunvideo/$BASENAME $MOVIE_PATH
+else
+  MOVIE_PATH=$URI
+fi
+
+OUT_WIDTH=720
+OUT_HEIGHT=576
+RESIZE_WH="720x576"
+echo "RESIZE_WH = $RESIZE_WH"     
+mogrify -auto-orient $MOVIE_PATH
+     
+if [[ $OUTPUT_PATH == "dvd-logo.mpeg" ]]; then
+
+VFILTER="[0:v]scale=w=720:h=576:force_original_aspect_ratio=decrease,split[in0][in1];[in0]scale=ih*16/9+1:-1,boxblur=luma_radius=min(h\,w)/20:luma_power=1:chroma_radius=min(cw\,ch)/20:chroma_power=1[bg];[bg][in1]overlay=(W-w)/2:(H-h)/2,crop=h=iw*9/16"
+
+ffmpeg -nostats -fflags +genpts -loop 1 -i $MOVIE_PATH -lavfi $VFILTER -t 10 -aspect 16:9 -target ntsc-dvd -y $OUTPUT_PATH
+
+else
+
+cp $MOVIE_PATH $TMP_IMAGEPATH
+cp $MOVIE_PATH $TMP_BACKIMAGEPATH
+
+mogrify -resize 720x576 $TMP_IMAGEPATH
+convert $MOVIE_PATH -blur 0x50 $TMP_BACKIMAGEPATH
+
+CROP_WIDTH=$(identify -format "%w" $TMP_IMAGEPATH)
+CROP_HEIGHT=$(identify -format "%h" $TMP_IMAGEPATH)
+echo "RESIZED $CROP_WIDTH * $CROP_HEIGHT"
+
+CROPVALUE="crop=720:576"
+
+ffmpeg -nostats -fflags +genpts -loop 1 -i $TMP_BACKIMAGEPATH -t 10 -vf "scale='if(gt(iw,ih),-1,720)':'if(gt(iw,ih),576,-1)'" -aspect 16:9 -target ntsc-dvd -y $TMP_PATH
+
+VFILTER="[0:v]scale=w=720:h=576:force_original_aspect_ratio=decrease,split[in0][in1];[in0]scale=ih*16/9+1:-1,boxblur=luma_radius=min(h\,w)/20:luma_power=1:chroma_radius=min(cw\,ch)/20:chroma_power=1[bg];[bg][in1]overlay=(W-w)/2:(H-h)/2,crop=min(iw\,ih*(16/9)):ow/(16/9)"
+
+echo "VFILTER=$VFILTER"
+
+ffmpeg  -nostats -fflags +genpts -i $TMP_PATH -i $TMP_IMAGEPATH -filter_complex "[0:v][1:v] overlay=(W-$CROP_WIDTH)/2:(H-$CROP_HEIGHT)/2:enable='between(t,0,10)'" -pix_fmt yuv420p -c:a copy -aspect 16:9 -target ntsc-dvd -y $OUTPUT_PATH
+
+rm -f $TMP_PATH
+rm -f $TMP_IMAGEPATH
+rm -f $TMP_BACKIMAGEPATH
+  
+fi

@@ -1,0 +1,97 @@
+#!/bin/bash -e
+
+URI=$1
+OUTPUT_PATH=$2
+BASENAME=`basename "${URI#https://}"`
+MOVIE_PATH="/tmp/$BASENAME"
+TMP_PATH="/tmp/tempvideo_$BASENAME"
+BLACK_IMAGE_PATH="/var/www/html/public/audioframe.jpg"
+
+echo "URI:           $URI"
+echo "MOVIE_PATH:    $MOVIE_PATH"
+echo "BASENAME:      $BASENAME"
+
+if [[ $URI == https://* ]]; then
+  function finish() {
+    rm -f $MOVIE_PATH
+  }
+
+  trap finish EXIT
+
+  s3cmd get s3://burunvideo/$BASENAME $MOVIE_PATH
+else
+  MOVIE_PATH=$URI
+fi
+
+# Get the size of input video:
+eval $(ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width ${MOVIE_PATH})
+IN_WIDTH=${streams_stream_0_width}
+IN_HEIGHT=${streams_stream_0_height}
+echo "VIDEO WIDTH=$IN_WIDTH"
+echo "VIDEO HEIGHT=$IN_HEIGHT"     
+
+VIDEO_INFO=$( ffprobe -v error -show_entries format_tags=comment: -of default=noprint_wrappers=1 $MOVIE_PATH)
+CROPVALUE=$(ffmpeg -i $MOVIE_PATH -t 1 -vf cropdetect -f null - 2>&1 | awk '/crop/ { print $NF }' | tail -1)
+
+echo $VIDEO_INFO
+
+if [[ "$VIDEO_INFO" == "TAG:comment=EASTMAN KODAK COMPANY  KODAK DX7590 ZOOM DIGITAL CAMERA" ]]; then     
+
+	echo "SPECIAL OVERLAY ISSUE"
+
+	OUT_WIDTH=720
+	OUT_HEIGHT=576
+
+	# Get the difference between actual and desired size
+	W_DIFF=$[ ${OUT_WIDTH} - ${IN_WIDTH} ]
+	H_DIFF=$[ ${OUT_HEIGHT} - ${IN_HEIGHT} ]
+
+	# Let's take the shorter side, so the video will be at least as big
+	# as the desired size:
+	CROP_SIDE="n"
+	if [ ${W_DIFF} -lt ${H_DIFF} ] ; then
+	  SCALE="-2:${OUT_HEIGHT}"
+	  CROP_SIDE="w"
+	else
+	  SCALE="${OUT_WIDTH}:-2"
+	  CROP_SIDE="h"
+	fi
+
+	# Then perform a first resizing
+	ffmpeg -i ${MOVIE_PATH} -vf scale=${SCALE} ${TMP_PATH}
+
+	# Now get the temporary video size
+	eval $(ffprobe -v error -of flat=s=_ -select_streams v:0 -show_entries stream=height,width ${TMP_PATH})
+	IN_WIDTH=${streams_stream_0_width}
+	IN_HEIGHT=${streams_stream_0_height}
+
+	# Calculate how much we should crop
+	if [ "z${CROP_SIDE}" = "zh" ] ; then
+	  DIFF=$[ ${IN_HEIGHT} - ${OUT_HEIGHT} ]
+	  CROP="in_w:in_h-${DIFF}"
+	elif [ "z${CROP_SIDE}" = "zw" ] ; then
+	  DIFF=$[ ${IN_WIDTH} - ${OUT_WIDTH} ]
+	  CROP="in_w-${DIFF}:in_h"
+	fi
+
+	VFILTER="[0:v]scale=$SCALE:force_original_aspect_ratio=decrease,split[in0][in1];[in0]scale=ih*16/9+1:-1,boxblur=luma_radius=min(h\,w)/20:luma_power=1:chroma_radius=min(cw\,ch)/20:chroma_power=1[bg];[bg][in1]overlay=(W-w)/2:(H-h)/2,crop=min(iw\,ih*(16/9)):ow/(16/9)"
+	echo "VFILTER = $VFILTER"
+	# Then crop...
+	#ffmpeg -i ${TMP_PATH} -filter:v "crop=${CROP}" ${MOVIE_PATH}
+
+	ffmpeg -nostats -fflags +genpts -re -i $TMP_PATH -lavfi $VFILTER -aspect 16:9 -target ntsc-dvd -y $OUTPUT_PATH
+
+elif [[ "$IN_WIDTH" == "" || "$IN_HEIGHT" == "" ]]; then
+	
+	echo "Converting without Vfilter"
+	ffmpeg -loop 1 -i $BLACK_IMAGE_PATH -i $MOVIE_PATH -c:v libx264 -tune stillimage -c:a aac -strict experimental -b:a 192k -pix_fmt yuv420p -shortest -aspect 16:9 -target ntsc-dvd -y $OUTPUT_PATH
+	#ffmpeg -i $MOVIE_PATH $OUTPUT_PATH
+else
+
+	VFILTER="[0:v]scale=w=720:h=576:force_original_aspect_ratio=decrease,split[in0][in1];[in0]scale=ih*16/9+1:-1,boxblur=luma_radius=min(h\,w)/20:luma_power=1:chroma_radius=min(cw\,ch)/20:chroma_power=1[bg];[bg][in1]overlay=(W-w)/2:(H-h)/2,crop=min(iw\,ih*(16/9)):ow/(16/9)"
+
+	ffmpeg -nostats -fflags +genpts -re -i $MOVIE_PATH -lavfi $VFILTER -aspect 16:9 -target ntsc-dvd -y $OUTPUT_PATH
+
+fi
+
+rm -f $TMP_PATH

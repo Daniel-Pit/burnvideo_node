@@ -1,0 +1,756 @@
+var convertingNode0 = require('node-cron');
+var convertingNode1 = require('node-cron');
+var convertingNode2 = require('node-cron');
+var convertingNode3 = require('node-cron');
+var localfileSystem = require('fs');
+var log4js = require('log4js');
+var childexec = require('child_process').exec;
+var exec = require('sync-exec');
+var fString = require('string');
+var slashes = require('slashes');
+var localfileSystemSync = require('fs-sync');
+var findRemoveSync = require('find-remove');
+var which = require('which');
+var serverSettings = require('../settings');
+
+var appThreadNumber0 = serverSettings.appNumber0;
+var appThreadNumber1 = serverSettings.appNumber1;
+var appThreadNumber2 = serverSettings.appNumber2;
+var appThreadNumber3 = serverSettings.appNumber3;
+
+var scheduleSetting0 = serverSettings.scheduleSetting0;
+var scheduleSetting1 = serverSettings.scheduleSetting1;
+var scheduleSetting2 = serverSettings.scheduleSetting2;
+var scheduleSetting3 = serverSettings.scheduleSetting3;
+
+var convertingThreadCount = serverSettings.threadLimit;
+
+var web_absolute_path = "/var/www/html/";
+//var web_absolute_path = "/home/ubuntu/workspace/";
+var web_absolute_publicPath = web_absolute_path + "public/";
+var web_absolute_uploadPath = web_absolute_publicPath + "uploads/order/";
+var ffmpegShellPath = web_absolute_path + "app/Console/Commands/";
+
+var shellStartCommnad = "/bin/bash";
+
+module.exports = function(app) {
+    
+    const dbConnector = app.models.file.dataSource.connector;
+	const dvdlogoPath = __dirname + "/dvd-logo.mpeg";
+    var zeroFill = function( number, width )
+    {
+        width -= number.toString().length;
+        if ( width > 0 )
+        {
+            return new Array( width + (/\./.test( number ) ? 2 : 1) ).join( '0' ) + number;
+        }
+        return number + ""; // always return a string
+    }
+    
+    var asyncCommandExecute = function(commandstring, loggingObject, callbackfunc){
+        
+        exec(commandstring, function(error, stdout, stderr) {
+                                        
+            console.log('stdout: ', stdout);
+            loggingObject.info("execute command result " + stdout);
+            
+            console.log('stderr: ', stderr);
+            loggingObject.info("execute command result stdError " + stderr);
+            
+            if (error !== null) {
+                loggingObject.info("execute command result error " + error);
+                console.log('exec error: ', error);
+                return callbackfunc(error, false);
+            }
+            
+            return callbackfunc(null, true);
+        });        
+        
+    };
+
+    var asyncBrokenCheck = function(commandstring){
+        
+		return exec(commandstring);
+        
+    };
+    
+	var asyncParallel = function(tasks, callbackfunc) {
+	  var results = [];
+	  var count = tasks.length;
+	  tasks.forEach(function(task, index) {
+	  	
+			childexec(task, function (error, stdout, stderr) {
+			      results[index] = stdout;
+			      if (error) {
+			        	callbackfunc && callbackfunc(error);
+			        	callbackfunc = null;
+			      }
+			      if (stderr) {
+			        	callbackfunc && callbackfunc(stderr);
+			        	callbackfunc = null;
+			      }
+			      if (--count === 0 && callbackfunc) {
+			        	callbackfunc(null, results);
+			      }
+			});
+		    // task(function(err, data) {
+		    //   results[index] = data;
+		    //   if (err) {
+		    //     callbackfunc && callbackfunc(err);
+		    //     callbackfunc = null;
+		    //   }
+		    //   if (--count === 0 && callbackfunc) {
+		    //     callbackfunc(null, results);
+		    //   }
+		    // });
+	  });
+	};    
+    
+    var cronJobWork = function(threadNumber, callbackfunc){
+
+        //var fileModel = app.models.file;
+        //var orderFileModel = app.models.order_file;
+        var orderModel = app.models.orders;
+        var orderShippingModel = app.models.order_shipping;
+
+		var convertOrderOneWhere = {
+			"where": {
+				"status": 1,
+				"burn_lock": 0
+			},
+			"order": "inserttime ASC"
+		};
+		//testing 7409
+		//convertOrderOneWhere = {
+		//    "where": {
+		//        "id": 7409
+		//    },
+		//    "order": "inserttime ASC"
+		//};
+		orderModel.findOne(convertOrderOneWhere, function(err, findOrderResult){
+
+			if(err){
+				console.log("find Order Error = " + err);
+				return callbackfunc(err, false);
+			}
+			
+			console.log("findOrderResult= " + JSON.stringify(findOrderResult));
+			
+			if ( findOrderResult ){
+				
+				var orderId = findOrderResult.id;
+				var order_dir_path = web_absolute_uploadPath + orderId;
+
+				var logFile = order_dir_path + "/convert_" + orderId + ".log";
+				var convertLogCat = "convert" + orderId;
+				log4js.configure({
+				  appenders: [
+					{ type: 'console' },
+					{ type: 'file', maxLogSize: 204800, filename: logFile, category: convertLogCat }
+				  ]
+				});
+				var convertLogger = log4js.getLogger(convertLogCat); 
+				convertLogger.setLevel('INFO');
+				if (!localfileSystem.existsSync(order_dir_path)) {
+					localfileSystem.mkdirSync(order_dir_path);
+				}
+				
+				var order_dvd_path = order_dir_path + "/dvd";
+				
+				if (!localfileSystem.existsSync(order_dvd_path)) {
+					localfileSystem.mkdirSync(order_dvd_path);
+				}
+				
+				var burn_lock_data = {
+					"burn_lock": 1,
+					"burn_app": 1,
+					"burn_app_num": threadNumber
+				};
+				
+				findOrderResult.updateAttributes(burn_lock_data, function(err, updatedOrderResult){
+					
+					if ( err ) {
+						console.log("burn lock Error" + err);
+						convertLogger.info("burn lock Error" + err);
+						return callbackfunc(err, false);
+					}
+					
+					var dvd_zip = order_dvd_path + "-" + orderId + ".zip";
+					
+					var orderFilesSql = "select DISTINCT f.furl as uniquefurl, f.* from file f " 
+										+ "inner join order_file of on of.fid = f.id " 
+										+ "inner join orders o on o.id = of.oid " 
+										+ "where o.id = '" + orderId + "' order by f.file_index, f.id asc;";
+					dbConnector.execute(orderFilesSql, null, (err, resultOrderFiles) => {
+						
+						if ( err ) {
+							console.log( "select order files Error " + err );
+							convertLogger.info( "select order files Error " + err );
+							return callbackfunc(err, false);
+						}
+						if ( resultOrderFiles ) {
+							
+							console.log("resultObjects = " + JSON.stringify(resultOrderFiles));
+							var scriptfile = order_dir_path + "/mkdvd.sh";
+							var dvdxml = order_dir_path + "/dvd.xml";
+							
+							var dvdConvertShellContent = "#!/bin/bash\n" 
+											+ "set -x #echo commands\n"
+											+ "export PATH=\$PATH:/usr/local/bin\n"
+											+ "export VIDEO_FORMAT=NTSC\n"
+											+ "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/lib:/usr/local/lib\n"
+											+ "cd " + order_dir_path + "\n"
+											+ "\n";
+							var dvdlogoTargetPath = order_dir_path + "/dvd-logo.mpeg";
+							
+							localfileSystemSync.copy(dvdlogoPath, dvdlogoTargetPath);
+							var dvdxmlContent = "<dvdauthor>"
+											+ "<vmgm></vmgm>"
+											+ "<titleset><titles><pgc>"
+											+ "<vob file='dvd-logo.mpeg' />";
+							
+							var parallalConvertInitBashString = dvdConvertShellContent;
+							var parallalConvert = [];
+							for(var i=0; i < resultOrderFiles.length; i++ ){
+							//resultOrderFiles.forEach(function(eachOrderFileData){
+								parallalConvert[i] = parallalConvertInitBashString;
+								
+								var fileId = resultOrderFiles[i].id;
+								var ftype = resultOrderFiles[i].ftype;
+								var source = resultOrderFiles[i].furl.toString().trim();
+								var targetfile = "";
+								if ( resultOrderFiles[i].ftsurl ) {
+									targetfile = resultOrderFiles[i].ftsurl.toString().trim();
+									console.log("targe File name exist file name = " + targetfile);
+								} else {
+									//targetfile = fString(source).replaceAll("https://s3.amazonaws.com/burunvideo/", "");
+									targetfile = source.split("/").pop().toString().trim();
+									//targetfile = fString(source).replaceAll("https://s3.amazonaws.com/burunvideo/", "");
+									console.log("targe File name not exist file name = " + targetfile);
+								}
+
+								var fileText = resultOrderFiles[i].ct_caption.trim();
+								
+								if (  
+									fString(source.toUpperCase()).endsWith('MOV') 
+									|| fString(source.toUpperCase()).endsWith('MP4') 
+									|| fString(source.toUpperCase()).endsWith('AVI') 
+									|| fString(source.toUpperCase()).endsWith('MPG') 
+									|| fString(source.toUpperCase()).endsWith('M4V') 
+									|| fString(source.toUpperCase()).endsWith('F4V') 
+									|| fString(source.toUpperCase()).endsWith('WMV') 
+									|| fString(source.toUpperCase()).endsWith('MPEG') 
+									|| fString(source.toUpperCase()).endsWith('3GP') 
+									|| fString(source.toUpperCase()).endsWith('MTS') 
+								){
+									ftype = "video";
+								}
+
+								console.log("ftype = " + ftype);
+								////////////////////////////////////////////////////////////////////////////////////////////////////////
+								//s3 bucket url check
+								var replace_str = "";
+								
+								if (fString(source).contains('s3.amazonaws.com/burunvideo')) {
+									replace_str = order_dir_path;
+									targetfile = fString(source).replaceAll("https://s3.amazonaws.com/burunvideo/", "");
+									source = fString(source).replaceAll("https://s3.amazonaws.com/burunvideo", replace_str);
+									targetfile = targetfile.toString().trim();
+									source = source.toString().trim();
+								}
+								else{
+									if (fString(source).contains(web_absolute_publicPath) == false) {
+										
+										var lastSlashPos = source.lastIndexOf('/') + 1;
+										var rep_target = source.substr(lastSlashPos);
+										source = order_dir_path + "/" + rep_target;
+										source = source.toString().trim();
+									}
+		
+								}
+								var s3Command = "";
+
+								//file check 2
+								if(!localfileSystem.existsSync(source)){
+									//shell_exec(sprintf("s3cmd get s3://burunvideo/%s %s", $targetfile, $source));
+									s3Command = "s3cmd get s3://burunvideo/" + targetfile + " " + source;
+
+									convertLogger.info("s3Command file directly download = " + targetfile + " dest = " + source);        							
+
+									var result2 = exec(s3Command);
+									convertLogger.info("s3Command s3 directly download Result = " + JSON.stringify(result2));
+									console.log("s3Command s3 directly download Result = " + JSON.stringify(result2)); 
+
+									if ( result2.stderr )
+									{
+										convertLogger.info("s3Command directly retry file download = " + targetfile + " dest = " + source);
+										result2 = exec(s3Command);
+										convertLogger.info("s3Command directly retry file download Result = " + JSON.stringify(result2));
+										console.log("s3Command directly retry file download Result = " + JSON.stringify(result2)); 
+
+									}
+									 
+								}
+
+								//file check 1
+								if(!localfileSystem.existsSync(source)){
+									//AWS S3 Source url s3://burunvideo/dvdzip/%s/%s, $item->id, $targetfile
+									//shell_exec(sprintf("s3cmd get s3://burunvideo/dvdzip/%s/%s %s", $item->id, $targetfile, $source));
+									s3Command = "s3cmd get s3://burunvideo/dvdzip/" + orderId + "/" +targetfile + " " + source;
+									convertLogger.info("s3Command file from dvdzip download = " + targetfile + " dest = " + source);
+									var result1 = exec(s3Command);
+									convertLogger.info("s3Command file from dvdzip download Result = " + JSON.stringify(result1));
+									console.log("s3Command file from dvdzip download Result = " + JSON.stringify(result1)); 
+									
+								}
+								
+								//file size check
+								console.log("file size check :" + source);
+								var sourceFilestats = localfileSystem.statSync(source);
+								console.log("file states = " + JSON.stringify(sourceFilestats));
+								if(sourceFilestats.size == 0){
+									localfileSystem.unlinkSync(source);
+								}
+								//file size check 0
+								sourceFilestats = localfileSystem.statSync(source);
+								if(sourceFilestats.size == 0){
+									localfileSystem.unlinkSync(source);
+									continue;
+								}
+
+								convertLogger.info("script xml file write make an shell script");
+								////////////////////////////////////////////////////////////////////////////////////////////////
+								if ( ftype == "video" ) //video process
+								{
+
+
+									///////////////////////////////////////////////////////////////////////////////////////////////////////
+									// video broken check
+									var ffprobeWhich = null;
+									ffprobeWhich = which.sync('ffprobe');
+									if ( ffprobeWhich ){
+										var brokencheck_cmd = ffprobeWhich + " -v error " + source + " 2>&1";
+										var brokenfileCheckResult = null;
+										brokenfileCheckResult = asyncBrokenCheck(brokencheck_cmd);
+										convertLogger.info("broken file check Result = " + JSON.stringify(brokenfileCheckResult));
+										console.log("broken file check Result = " + JSON.stringify(brokenfileCheckResult)); 
+										
+										if(!brokenfileCheckResult){
+											//echo "error occur ->". $brokenfileCheckResult;
+											//echo "canceled file -> ".$source;
+											convertLogger.info("broken file found = " + source);
+											console.log("broken file found = " + source); 
+
+											localfileSystem.unlinkSync(source);
+											continue;
+										}
+									}
+
+									
+									
+									var dest = "dvd-" + orderId + "-" + fileId + ".mpeg";
+
+									if(fileText)
+									{
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_mpeg " . $source . " " . $dest . "\n");
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_mpegWithText " . $source . " " . $dest ." '". addslashes($fileText) ."'\n");
+										dvdConvertShellContent += ffmpegShellPath + 'convert_ntsc_to_mpegWithText ' + source + ' ' + dest + ' "' + slashes.add(fileText) + '"';
+										parallalConvert[i] += ffmpegShellPath + 'convert_ntsc_to_mpegWithText ' + source + ' ' + dest + ' "' + slashes.add(fileText) + '"';
+										
+									} 
+									else
+									{
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_mpeg " . $source . " " . $dest . "\n");
+										dvdConvertShellContent += ffmpegShellPath + "convert_ntsc_to_mpeg " + source + " " + dest;
+										parallalConvert[i] += ffmpegShellPath + "convert_ntsc_to_mpeg " + source + " " + dest;
+									}
+									
+									dvdConvertShellContent += "\n";
+									parallalConvert[i] += "\n";
+									dvdxmlContent += '<vob file="' + dest + '" />';
+									
+									console.log("current dvdConvertShellContent = " + dvdConvertShellContent);
+									console.log("current dvdxmlContent = " + dvdxmlContent);
+									////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+									
+								} 
+								else if(ftype == "image") // image process
+								{
+									var imgdest = "dvd-" + orderId + "-" + fileId + ".mpeg";
+									if(fileText){
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_image " . $source . " " . $dest . "\n");
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_image " . $source . " " . $dest . "\n");
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_imageWithText " . $source . " " . $dest . " '" . addslashes($fileText) . "'\n");
+										//fwrite($fpScriptfile, $mypath . '/convert_ntsc_to_imageWithText ' . $source . ' ' . $dest . ' "' . addslashes($fileText) . '"');
+										dvdConvertShellContent += ffmpegShellPath + 'convert_ntsc_to_imageWithText ' + source + ' ' + imgdest + ' "' + slashes.add(fileText) + '"';
+										parallalConvert[i] += ffmpegShellPath + 'convert_ntsc_to_imageWithText ' + source + ' ' + imgdest + ' "' + slashes.add(fileText) + '"';
+
+									} else {
+										
+										//fwrite($fpScriptfile, $mypath . "/convert_ntsc_to_image " . $source . " " . $dest . "\n");
+										dvdConvertShellContent += ffmpegShellPath + "convert_ntsc_to_image " + source + " " + imgdest;
+										parallalConvert[i] += ffmpegShellPath + "convert_ntsc_to_image " + source + " " + imgdest;
+									}
+									
+									dvdConvertShellContent += "\n";
+									parallalConvert[i] += "\n";
+									
+									dvdxmlContent += '<vob file="' + imgdest + '" />';
+
+									console.log("current dvdConvertShellContent = " + dvdConvertShellContent);
+									console.log("current dvdxmlContent = " + dvdxmlContent);
+								}
+								
+								
+							}
+							
+							// end shell script file
+							dvdConvertShellContent += "dvdauthor -o dvd -x dvd.xml\n";
+							// zip file
+							dvdConvertShellContent += "zip -r  dvd-" + orderId + ".zip dvd\n";
+							
+							var finalDvdConverting = parallalConvertInitBashString;
+							finalDvdConverting += "dvdauthor -o dvd -x dvd.xml\n";
+							// zip file
+							finalDvdConverting += "zip -r  dvd-" + orderId + ".zip dvd\n";
+							
+
+							dvdxmlContent += "</pgc></titles></titleset>";
+							dvdxmlContent += "</dvdauthor>";
+							
+							localfileSystem.writeFileSync(scriptfile, dvdConvertShellContent);
+							var eachScriptFile = [];
+							for(var eachScriptN = 0; eachScriptN < parallalConvert.length; eachScriptN ++ ){
+								eachScriptFile[eachScriptN] = order_dir_path + "/mkdvdconverting" + orderId + "_" + eachScriptN + ".sh";
+								
+								localfileSystem.writeFileSync(eachScriptFile, parallalConvert[eachScriptN]);
+							}
+							var finalDvdConvertingScript = order_dir_path + "/mkdvd" + orderId + ".sh";
+							localfileSystem.writeFileSync(finalDvdConvertingScript, finalDvdConverting);
+							
+							localfileSystem.writeFileSync(dvdxml, dvdxmlContent);
+							
+							var dvdInfoPath = order_dvd_path + "/" + orderId + ".info";
+							var orderDigitNumber = "A" + zeroFill(orderId, 8);
+							var dvdInfoContent = "";
+							dvdInfoContent += "\norderid : " + orderDigitNumber;
+							dvdInfoContent += "\ndvdtitle : " + findOrderResult.dvdtitle;
+							dvdInfoContent += "\ndvdcount : " + findOrderResult.dvdcount;
+							
+							var orderShippingWhere = {
+								"where": {
+									"orderid": orderId
+								}
+							};
+							console.log("order Ship where = " + JSON.stringify(orderShippingWhere));
+							orderShippingModel.find(orderShippingWhere, function(err, shipResults){
+								
+								if(err){
+									convertLogger.info("ship error" + err);
+									console.log("ship error" + err);
+									return callbackfunc(err, false);
+								}
+								console.log("ship data " + JSON.stringify(shipResults));
+								if (shipResults){
+									var shipNo = 1;
+									shipResults.forEach(function(eachShipData){
+										
+										dvdInfoContent += "\n Ship No " + shipNo;
+										dvdInfoContent += ",   user : " + eachShipData.firstname + " " + eachShipData.lastname;
+										dvdInfoContent += " ,  street : " + eachShipData.street;
+										dvdInfoContent += " ,  city : " + eachShipData.city;
+										dvdInfoContent += " ,  state : " + eachShipData.state;
+										dvdInfoContent += " ,  zipcode : " + eachShipData.zipcode;
+										dvdInfoContent += " ,  dvdcount : " + eachShipData.dvdcount;
+										
+										shipNo ++;
+										
+									});
+									
+									console.log("dvdInfoContent " + dvdInfoContent);
+									localfileSystem.writeFileSync(dvdInfoPath, dvdInfoContent);
+
+
+									var convertLogFile = order_dir_path + "/convert2.log";
+									var dvdConvertCommand = shellStartCommnad + " " + scriptfile + " >> " + convertLogFile + " 2>&1";
+									convertLogger.info("start dvdConvertCommand " + dvdConvertCommand);
+									console.log("start dvdConvertCommand " + dvdConvertCommand);
+
+									childexec(dvdConvertCommand, function (error, stdout, stderr) {
+
+										console.log('stdout: ' + stdout);
+
+										console.log('stderr: ' + stderr);
+										if (error !== null) {
+											console.log('DVD Burned Error: ' + error);
+											convertLogger.info("DVD Burned Error = " + JSON.stringify(error));
+											return callbackfunc(error, false);
+										}
+
+										//var burnedResult = exec(dvdConvertCommand);
+										convertLogger.info("DVD Burned stdout = " + JSON.stringify(stdout));
+										convertLogger.info("DVD Burned stderr = " + JSON.stringify(stderr));
+										console.log("DVD Burned = " + JSON.stringify(stdout)); 
+										
+
+										//var deleteDvdFolderCommand = "rm -rf " + order_dvd_path;
+											
+										//var dvdFolderDeletedResult = exec(deleteDvdFolderCommand);
+										//convertLogger.info("DVD folder Result Deleted = " + JSON.stringify(dvdFolderDeletedResult));
+										//console.log("DVD folder Result Deleted = " + JSON.stringify(dvdFolderDeletedResult)); 
+
+										var s3_upload_zip = "dvd-" + orderId + ".zip";
+										var processLogfile = "convert_" + orderId + ".log";
+										var middleDeletedResult = findRemoveSync(order_dir_path, { files: "*.*", ignore: ['convert2.log', processLogfile.toString().trim(), s3_upload_zip.toString().trim()]});
+										//var deleteFolderCommand = 'rm -v !("convert2.log"|"' + processLogfile + '"|"' + s3_upload_zip + '")';
+										//var deleteFolderCommand = 'find . -type f -not \( -name "*zip" -or -name "*log" \) -delete';
+
+										//var preprocessExec1 = exec("!#/bin/bash shopt -s extglob; set +H");	
+										//convertLogger.info("preprocessExec1 Result = " + JSON.stringify(preprocessExec1));
+										//var preprocessExec2 = exec("set +H");	
+										//convertLogger.info("preprocessExec2 Result = " + JSON.stringify(preprocessExec2));
+										//shell.exec('shopt -s extglob', {shell: '/bin/bash'});
+										//shell.exec('shopt -s extglob', {shell: '/bin/bash'});
+										//var middleDeletedResult = exec(deleteFolderCommand);
+										convertLogger.info("DVD convert folder Deleted = " + JSON.stringify(middleDeletedResult));
+										console.log("DVD convert folder Result Deleted = " + JSON.stringify(middleDeletedResult)); 
+
+
+										var s3SyncCommand = "s3cmd put -r --acl-public " + order_dir_path + "/ s3://burunvideo/dvdzip/" + orderId + "/";										
+										var s3SyncResult = exec(s3SyncCommand);
+										convertLogger.info("DVD Result S3 Synced = " + JSON.stringify(s3SyncResult));
+										console.log("DVD Result S3 Synced = " + JSON.stringify(s3SyncResult));
+
+										// update order save
+										var final_s3Url = "https://s3.amazonaws.com/burunvideo/dvdzip/" + orderId + "/" + s3_upload_zip;
+										var order_burned_updatedData = {
+											"zipurl": final_s3Url,
+											"status": 2,
+											"burn_lock": 0
+										};
+
+										updatedOrderResult.updateAttributes(order_burned_updatedData, function(err, burnedOrderResult){
+											
+											if ( err ){
+												convertLogger.info("final Burned Data Error " + err);
+												console.log("final Burned Data Error = " + err); 
+												return callbackfunc(err, false);
+											}
+
+											var deleteFinalFolderCommand = "rm -rf " + order_dir_path;
+												
+											var finalDeletedResult = exec(deleteFinalFolderCommand);
+											convertLogger.info("Burn Result Deleted = " + JSON.stringify(finalDeletedResult));
+											console.log("Burn Result Deleted = " + JSON.stringify(finalDeletedResult)); 
+
+											convertLogger.info("DVD converting End -- " + orderId);
+
+											return callbackfunc(null, true);
+										});
+
+									});
+
+
+								}
+								
+							});
+							
+						}
+					});
+				});
+			}
+		});
+
+
+    	
+    };
+	
+    //cron job every {setting} minuts
+    convertingNode0.schedule(scheduleSetting0, function(){
+    //cron job every 1 minuts for testing
+    //convertingNode.schedule('* * * * *', function(){
+        
+        console.log("every " + JSON.stringify(scheduleSetting0) + " minutes execute");
+        var orderModel = app.models.orders;
+        
+		var currentprogressWhereFilter = {
+			"status": 1,
+	        "burn_lock": 1,
+			"burn_app": 1,
+			"burn_app_num": appThreadNumber0
+		};
+
+		orderModel.count(currentprogressWhereFilter, function(err, countResult){
+
+			if (err)
+			{
+				console.log("find Order Error = " + err);
+                return err;
+			}
+			console.log("currentprogress0 Result Count = " + JSON.stringify(countResult));
+			if (countResult < convertingThreadCount )
+			{
+
+				cronJobWork(appThreadNumber0, function(err, bResult){
+					if ( err ) {
+						return false;
+					}
+					
+					if ( bResult ) {
+						return true;
+					}
+				});
+
+			} else {
+
+				return true;
+			}
+		});
+
+
+	//node cron end
+    });
+
+    //cron job every {setting} minuts
+    convertingNode1.schedule(scheduleSetting1, function(){
+    //cron job every 1 minuts for testing
+    //convertingNode.schedule('* * * * *', function(){
+        
+        console.log("every " + JSON.stringify(scheduleSetting1) + " minutes execute");
+        var orderModel = app.models.orders;
+        
+		var currentprogressWhereFilter = {
+			"status": 1,
+	        "burn_lock": 1,
+			"burn_app": 1,
+			"burn_app_num": appThreadNumber1
+		};
+
+		orderModel.count(currentprogressWhereFilter, function(err, countResult){
+
+			if (err)
+			{
+				console.log("find Order Error = " + err);
+                return err;
+			}
+			console.log("currentprogress1 Result Count = " + JSON.stringify(countResult));
+			if (countResult < convertingThreadCount )
+			{
+
+				cronJobWork(appThreadNumber1, function(err, bResult){
+					if ( err ) {
+						return false;
+					}
+					
+					if ( bResult ) {
+						return true;
+					}
+				});
+
+			} else {
+
+				return true;
+			}
+		});
+
+
+	//node cron end
+    });
+
+
+    //cron job every {setting} minuts
+    convertingNode2.schedule(scheduleSetting2, function(){
+    //cron job every 1 minuts for testing
+    //convertingNode.schedule('* * * * *', function(){
+        
+        console.log("every " + JSON.stringify(scheduleSetting2) + " minutes execute");
+        var orderModel = app.models.orders;
+        
+		var currentprogressWhereFilter = {
+			"status": 1,
+	        "burn_lock": 1,
+			"burn_app": 1,
+			"burn_app_num": appThreadNumber2
+		};
+
+		orderModel.count(currentprogressWhereFilter, function(err, countResult){
+
+			if (err)
+			{
+				console.log("find Order Error = " + err);
+                return err;
+			}
+			console.log("currentprogress2 Result Count = " + JSON.stringify(countResult));
+			if (countResult < convertingThreadCount )
+			{
+
+				cronJobWork(appThreadNumber2, function(err, bResult){
+					if ( err ) {
+						return false;
+					}
+					
+					if ( bResult ) {
+						return true;
+					}
+				});
+
+			} else {
+
+				return true;
+			}
+		});
+
+
+	//node cron end
+    });
+
+
+    //cron job every {setting} minuts
+    convertingNode3.schedule(scheduleSetting3, function(){
+    //cron job every 1 minuts for testing
+    //convertingNode.schedule('* * * * *', function(){
+        
+        console.log("every " + JSON.stringify(scheduleSetting3) + " minutes execute");
+        var orderModel = app.models.orders;
+        
+		var currentprogressWhereFilter = {
+			"status": 1,
+	        "burn_lock": 1,
+			"burn_app": 1,
+			"burn_app_num": appThreadNumber3
+		};
+
+		orderModel.count(currentprogressWhereFilter, function(err, countResult){
+
+			if (err)
+			{
+				console.log("find Order Error = " + err);
+                return err;
+			}
+			console.log("currentprogress3 Result Count = " + JSON.stringify(countResult));
+			if (countResult < convertingThreadCount )
+			{
+
+				cronJobWork(appThreadNumber3, function(err, bResult){
+					if ( err ) {
+						return false;
+					}
+					
+					if ( bResult ) {
+						return true;
+					}
+				});
+
+			} else {
+
+				return true;
+			}
+		});
+
+
+	//node cron end
+    });
+
+
+}

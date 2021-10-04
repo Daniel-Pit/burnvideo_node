@@ -1,0 +1,25 @@
+{
+  "db": {
+    "name": "db",
+    "connector": "memory"
+  },
+  "mySqldvdburner": {
+    "host": "localhost",
+    "port": 3306,
+    "url": "mysql://root:E7HBKchP4zabtjMjY3P2PSDa8PRKAVpn@localhost/dvdburner",
+    "database": "dvdburner",
+    "password": "E7HBKchP4zabtjMjY3P2PSDa8PRKAVpn",
+    "name": "mySqldvdburner",
+    "user": "root",
+    "connector": "mysql"
+  },
+  "awsStorage": {
+    "name": "awsStorage",
+    "connector": "loopback-component-storage",
+    "provider": "amazon",
+    "key": "Vb4xN1FCjy8KYk9WWzy8330TmvgoE4L2DjWvJgPa",
+    "keyId": "AKIAJACS2TNKPH44FERA",
+    "acl": "public-read",
+    "maxFileSize": "4294967296"
+  }
+}

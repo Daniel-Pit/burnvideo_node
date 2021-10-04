@@ -1,0 +1,44 @@
+{
+  "name": "Social",
+  "base": "PersistedModel",
+  "idInjection": true,
+  "options": {
+    "validateUpsert": true
+  },
+  "properties": {
+    "category": {
+      "type": "string",
+      "required": true,
+      "default": "fb"
+    },
+    "sourcePath": {
+      "type": "string",
+      "required": true
+    },
+    "destPath": {
+      "type": "string"
+    },
+    "mediaType": {
+      "type": "string",
+      "required": true,
+      "default": "video"
+    },
+    "upload_at": {
+      "type": "number"
+    },
+    "uploaded_at": {
+      "type": "number"
+    }
+  },
+  "validations": [],
+  "relations": {},
+  "acls": [
+    {
+      "accessType": "*",
+      "principalType": "ROLE",
+      "principalId": "$everyone",
+      "permission": "ALLOW"
+    }
+  ],
+  "methods": {}
+}

@@ -1,0 +1,24 @@
+var serverSettings = {
+    "appNumber0": 0,
+    "appNumber1": 1,
+    "appNumber2": 2,
+    "appNumber3": 3,
+    "scheduleSetting0": '*/2 * * * *',
+    "scheduleSetting1": '*/4 * * * *',
+    "scheduleSetting2": '*/6 * * * *',
+    "scheduleSetting3": '*/8 * * * *',
+    "threadLimit": 1,
+    "awsS3Setting": {
+        "maxAsyncS3": 20,     // this is the default
+        "s3RetryCount": 3,    // this is the default
+        "s3RetryDelay": 1000, // this is the default
+        "multipartUploadThreshold": 20971520, // this is the default (20 MB)
+        "multipartUploadSize": 15728640, // this is the default (15 MB)
+        "s3Options": {
+            "accessKeyId": "AKIAJACS2TNKPH44FERA",
+            "secretAccessKey": "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"
+        }
+    }
+}
+
+module.exports = serverSettings;
